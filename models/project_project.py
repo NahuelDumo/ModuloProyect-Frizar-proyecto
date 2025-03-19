@@ -1,39 +1,32 @@
 from odoo import models, fields, api
-from odoo.exceptions import ValidationError
 
 class ProjectProject(models.Model):
     _inherit = 'project.project'
 
-    is_frozen = fields.Boolean(string="Frizado", default=False)
+    def copy(self, default=None):
+        """ Crea una réplica exacta del proyecto SIN tocar el original """
+        default = dict(default or {})
 
-    @api.constrains('task_ids')
-    def _check_frozen_project(self):
-        """ Evita modificar tareas si el proyecto está frizado """
-        for project in self:
-            if project.is_frozen:
-                raise ValidationError("No puedes modificar tareas en un proyecto frizado.")
+        # Copiar el proyecto
+        new_project = super(ProjectProject, self).copy(default)
 
-class ProjectTask(models.Model):
-    _inherit = 'project.task'
+        # Diccionario para mapear tareas originales con sus copias
+        task_mapping = {}
 
-    @api.model
-    def create(self, vals):
-        """ Evita crear tareas en proyectos frizados """
-        project = self.env['project.project'].browse(vals.get('project_id'))
-        if project.is_frozen:
-            raise ValidationError("No puedes agregar tareas a un proyecto frizado.")
-        return super(ProjectTask, self).create(vals)
+        # Copiar cada tarea asociándola al nuevo proyecto y mantener sus datos
+        for task in self.task_ids:
+            new_task = task.copy({
+                'project_id': new_project.id,  # Asociar la nueva tarea al nuevo proyecto
+                'parent_id': False  # Inicialmente sin padre para evitar problemas de referencia
+            })
+            task_mapping[task.id] = new_task.id  # Guardar referencia entre original y copia
 
-    def write(self, vals):
-        """ Evita modificar tareas en proyectos frizados """
-        for task in self:
-            if task.project_id.is_frozen:
-                raise ValidationError("No puedes modificar tareas en un proyecto frizado.")
-        return super(ProjectTask, self).write(vals)
+        # Ajustar las relaciones de subtareas en la copia
+        for task in self.task_ids:
+            if task.child_ids:
+                copied_task = self.env['project.task'].browse(task_mapping[task.id])
+                copied_task.write({
+                    'child_ids': [(6, 0, [task_mapping[child.id] for child in task.child_ids if child.id in task_mapping])]
+                })
 
-    def unlink(self):
-        """ Evita eliminar tareas de proyectos frizados """
-        for task in self:
-            if task.project_id.is_frozen:
-                raise ValidationError("No puedes eliminar tareas de un proyecto frizado.")
-        return super(ProjectTask, self).unlink()
+        return new_project
